@@ -594,7 +594,7 @@ function updateMario() {
 
   // Fireball
   if(!skipInput && mario.state === 'fire' && keys['KeyZ'] && fireballs.length < 2) {
-    fireballs.push({x:mario.x+mario.facing*8, y:mario.y+4, vx:mario.facing*4, vy:0, bouncing:true, active:true});
+    fireballs.push({x:mario.x+mario.facing*8, y:mario.y-8, vx:mario.facing*4, vy:0, bouncing:true, active:true, spawnProtect:5});
     playSound('fireball');
     keys['KeyZ'] = false; // prevent spam
   }
@@ -818,9 +818,10 @@ function updateItems() {
 function updateFireballs() {
   fireballs.forEach(fb => {
     if(!fb.active) return;
+    if(fb.spawnProtect > 0) fb.spawnProtect--;
     fb.vy += GRAVITY;
     fb.x += fb.vx;
-    if(worldCollide(fb.x, fb.y, 4, 4)) { fb.active = false; return; }
+    if(fb.spawnProtect <= 0 && worldCollide(fb.x, fb.y, 4, 4)) { fb.active = false; return; }
     fb.y += fb.vy;
     if(worldCollide(fb.x, fb.y, 4, 4)) {
       fb.y = Math.floor((fb.y+4)/T)*T - 4;
