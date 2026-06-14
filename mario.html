@@ -1,0 +1,1619 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Super Mario Bros - World 1-1</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+canvas { image-rendering: pixelated; image-rendering: crisp-edges; }
+#gameContainer { position: relative; }
+#overlay {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  display: flex; flex-direction: column; justify-content: center; align-items: center;
+  background: rgba(0,0,0,0.7); color: white; font-family: monospace; z-index: 10;
+}
+#overlay h1 { font-size: 28px; color: #e52521; text-shadow: 2px 2px #000; margin-bottom: 10px; }
+#overlay h2 { font-size: 18px; color: #fbd000; margin-bottom: 20px; }
+#overlay p { font-size: 14px; color: #aaa; margin: 4px 0; }
+#overlay .blink { animation: blink 1s infinite; font-size: 16px; color: #fff; margin-top: 20px; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+</style>
+</head>
+<body>
+<div id="gameContainer">
+<canvas id="game"></canvas>
+<div id="overlay">
+  <h1>SUPER MARIO BROS.</h1>
+  <h2>©1985 NINTENDO</h2>
+  <p>← → 移动 &nbsp; ↑/空格 跳跃 &nbsp; Shift 加速</p>
+  <p>踩敌人头顶消灭它们！</p>
+  <div class="blink">按任意键开始</div>
+</div>
+</div>
+<script>
+// ============================================================
+// SUPER MARIO BROS - WORLD 1-1 FAITHFUL RECREATION
+// ============================================================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const overlay = document.getElementById('overlay');
+
+// NES resolution scaled up
+const SCALE = 3;
+const NES_W = 256;
+const NES_H = 240;
+canvas.width = NES_W * SCALE;
+canvas.height = NES_H * SCALE;
+ctx.imageSmoothingEnabled = false;
+
+// Tile size
+const T = 16;
+const GRAVITY = 0.5;
+const MAX_FALL = 8;
+
+// ============================================================
+// AUDIO ENGINE (Web Audio API - 8-bit sounds)
+// ============================================================
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+let audioCtx;
+function initAudio() { if (!audioCtx) audioCtx = new AudioCtx(); }
+
+function playSound(type) {
+  if (!audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  const t = audioCtx.currentTime;
+  switch(type) {
+    case 'jump':
+      osc.type='square'; osc.frequency.setValueAtTime(400,t);
+      osc.frequency.linearRampToValueAtTime(800,t+0.15);
+      gain.gain.setValueAtTime(0.15,t); gain.gain.linearRampToValueAtTime(0,t+0.2);
+      osc.start(t); osc.stop(t+0.2); break;
+    case 'coin':
+      osc.type='square'; osc.frequency.setValueAtTime(988,t);
+      osc.frequency.setValueAtTime(1319,t+0.07);
+      gain.gain.setValueAtTime(0.12,t); gain.gain.linearRampToValueAtTime(0,t+0.3);
+      osc.start(t); osc.stop(t+0.3); break;
+    case 'stomp':
+      osc.type='square'; osc.frequency.setValueAtTime(500,t);
+      osc.frequency.linearRampToValueAtTime(100,t+0.15);
+      gain.gain.setValueAtTime(0.15,t); gain.gain.linearRampToValueAtTime(0,t+0.2);
+      osc.start(t); osc.stop(t+0.2); break;
+    case 'powerup':
+      osc.type='square'; gain.gain.setValueAtTime(0.1,t);
+      [523,659,784,1047].forEach((f,i)=>{
+        osc.frequency.setValueAtTime(f,t+i*0.08);
+      });
+      gain.gain.linearRampToValueAtTime(0,t+0.5);
+      osc.start(t); osc.stop(t+0.5); break;
+    case 'bump':
+      osc.type='triangle'; osc.frequency.setValueAtTime(200,t);
+      osc.frequency.linearRampToValueAtTime(100,t+0.08);
+      gain.gain.setValueAtTime(0.15,t); gain.gain.linearRampToValueAtTime(0,t+0.1);
+      osc.start(t); osc.stop(t+0.1); break;
+    case 'break':
+      osc.type='sawtooth'; osc.frequency.setValueAtTime(300,t);
+      osc.frequency.linearRampToValueAtTime(50,t+0.15);
+      gain.gain.setValueAtTime(0.12,t); gain.gain.linearRampToValueAtTime(0,t+0.2);
+      osc.start(t); osc.stop(t+0.2); break;
+    case 'die':
+      osc.type='square'; gain.gain.setValueAtTime(0.15,t);
+      [600,500,400,300,200,150].forEach((f,i)=>{
+        osc.frequency.setValueAtTime(f,t+i*0.12);
+      });
+      gain.gain.linearRampToValueAtTime(0,t+0.8);
+      osc.start(t); osc.stop(t+0.8); break;
+    case 'flagpole':
+      osc.type='square'; gain.gain.setValueAtTime(0.1,t);
+      [523,587,659,698,784,880,988,1047].forEach((f,i)=>{
+        osc.frequency.setValueAtTime(f,t+i*0.06);
+      });
+      gain.gain.linearRampToValueAtTime(0,t+0.7);
+      osc.start(t); osc.stop(t+0.7); break;
+    case '1up':
+      osc.type='square'; gain.gain.setValueAtTime(0.1,t);
+      [330,392,523,392,523,659].forEach((f,i)=>{
+        osc.frequency.setValueAtTime(f,t+i*0.08);
+      });
+      gain.gain.linearRampToValueAtTime(0,t+0.6);
+      osc.start(t); osc.stop(t+0.6); break;
+    case 'fireball':
+      osc.type='sawtooth'; osc.frequency.setValueAtTime(800,t);
+      osc.frequency.linearRampToValueAtTime(200,t+0.1);
+      gain.gain.setValueAtTime(0.08,t); gain.gain.linearRampToValueAtTime(0,t+0.12);
+      osc.start(t); osc.stop(t+0.12); break;
+    case 'gameover':
+      osc.type='square'; gain.gain.setValueAtTime(0.12,t);
+      [392,0,350,0,330,262,294,311,247,262,220].forEach((f,i)=>{
+        if(f>0) osc.frequency.setValueAtTime(f,t+i*0.15);
+      });
+      gain.gain.linearRampToValueAtTime(0,t+1.8);
+      osc.start(t); osc.stop(t+1.8); break;
+  }
+}
+
+// ============================================================
+// COLOR PALETTE (NES-authentic)
+// ============================================================
+const PAL = {
+  sky: '#5c94fc',
+  ground1: '#c84c0c', ground2: '#a43400',
+  brick1: '#c84c0c', brick2: '#a43400', brickLine: '#6a2400',
+  qblock1: '#fcb040', qblock2: '#c87800', qblockLine: '#886400',
+  usedBlock: '#a43400',
+  pipe1: '#00a800', pipe2: '#00fc00', pipeDark: '#005800',
+  marioRed: '#e52521', marioBrown: '#ac7c00', marioSkin: '#fcb8a0',
+  marioFire1: '#fff', marioFire2: '#e52521',
+  goomba1: '#c84c0c', goomba2: '#000', goombaLight: '#fcb040',
+  koopa1: '#00a800', koopa2: '#00fc00', koopaYellow: '#fcb040',
+  mushroom1: '#e52521', mushroom2: '#fff',
+  fireFlower1: '#e52521', fireFlower2: '#fcb040',
+  star1: '#fcb040', star2: '#00fc00',
+  coin: '#fcb040',
+  castle1: '#a43400', castle2: '#c84c0c',
+  flagGreen: '#00a800',
+  text: '#fff',
+  white: '#fff', black: '#000',
+};
+
+// ============================================================
+// LEVEL DATA - WORLD 1-1 (authentic layout)
+// ============================================================
+// Tile types: 0=air, 1=ground, 2=brick, 3=question(coin), 4=question(mushroom),
+// 5=hard block, 6=used block, 7=pipe_top_left, 8=pipe_top_right,
+// 9=pipe_body_left, 10=pipe_body_right, 11=empty_decorative_brick
+const LEVEL_WIDTH = 224; // in tiles (3584 pixels / 16)
+const LEVEL_HEIGHT = 15; // 15 tiles visible (240px / 16 = 15)
+
+let level = [];
+
+function buildLevel() {
+  level = [];
+  for (let y = 0; y < LEVEL_HEIGHT; y++) {
+    level[y] = new Array(LEVEL_WIDTH).fill(0);
+  }
+  // Ground (rows 13,14 are ground)
+  for (let x = 0; x < LEVEL_WIDTH; x++) {
+    level[13][x] = 1;
+    level[14][x] = 1;
+  }
+  // Gaps in ground
+  const gaps = [[69,70],[86,87],[153,154],[155,156]];
+  gaps.forEach(([a,b]) => {
+    if(a < LEVEL_WIDTH) level[13][a] = 0;
+    if(b < LEVEL_WIDTH) level[13][b] = 0;
+    if(a < LEVEL_WIDTH) level[14][a] = 0;
+    if(b < LEVEL_WIDTH) level[14][b] = 0;
+  });
+
+  // Question blocks with coins
+  const qCoins = [[16,9],[21,9],[23,9],[22,5],[78,9],[94,9],[106,5],[109,9],[109,5],[112,5],[170,9]];
+  qCoins.forEach(([x,y]) => { if(x<LEVEL_WIDTH) level[y][x] = 3; });
+
+  // Question blocks with mushroom/fire flower
+  const qMush = [[22,9],[106,9]];
+  qMush.forEach(([x,y]) => { if(x<LEVEL_WIDTH) level[y][x] = 4; });
+
+  // Brick blocks
+  const bricks = [
+    [20,9],[24,9],[77,9],[79,9],[80,9],[81,9],[85,5],[86,5],[87,5],[88,5],[89,5],[90,5],[91,5],[92,5],
+    [94,5],[100,9],[101,9],[118,9],[121,9],[122,9],[123,9],[128,5],[129,5],[130,5],[131,5],
+    [168,9],[169,9],[171,9],
+    // Elevated bricks near flag
+    [198,9],[199,9],[200,9],
+  ];
+  bricks.forEach(([x,y]) => { if(x<LEVEL_WIDTH && level[y][x]===0) level[y][x] = 2; });
+
+  // Hard blocks (stairs near end)
+  // Step structures near flagpole
+  // Left staircase before flagpole (x=198-201)
+  for(let sy = 12; sy >= 9; sy--) {
+    let count = 13 - sy;
+    for(let i = 0; i < count; i++) {
+      let tx = 198 + (count-1-i);
+      if(tx < LEVEL_WIDTH) level[sy][tx] = 5;
+    }
+  }
+  // Right staircase after flagpole (x=208-212)
+  for(let sy = 12; sy >= 9; sy--) {
+    let count = 13 - sy;
+    for(let i = 0; i < count; i++) {
+      let tx = 208 + i;
+      if(tx < LEVEL_WIDTH) level[sy][tx] = 5;
+    }
+  }
+
+  // Additional step structure
+  for(let sy = 12; sy >= 10; sy--) {
+    let count = 13 - sy;
+    for(let i = 0; i < count; i++) {
+      let tx = 135 + i;
+      if(tx < LEVEL_WIDTH) level[sy][tx] = 5;
+    }
+  }
+  // More step structures
+  for(let sy = 12; sy >= 10; sy--) {
+    let count = 13 - sy;
+    for(let i = 0; i < count; i++) {
+      let tx = 141 + (count-1-i);
+      if(tx < LEVEL_WIDTH) level[sy][tx] = 5;
+    }
+  }
+
+  // Small elevated platform
+  for(let i = 0; i < 3; i++) {
+    level[11][148+i] = 5;
+    level[12][148+i] = 5;
+  }
+
+  // Pipes
+  // Pipe 1 (height 2) at x=28
+  addPipe(28, 11, 2);
+  // Pipe 2 (height 3) at x=38
+  addPipe(38, 10, 3);
+  // Pipe 3 (height 4) at x=46
+  addPipe(46, 9, 4);
+  // Pipe 4 (height 4) at x=57
+  addPipe(57, 9, 4);
+  // Pipe 5 (height 1) at x=163
+  addPipe(163, 12, 1);
+  // Pipe 6 (height 2) at x=179
+  addPipe(179, 11, 2);
+
+  // Castle at end
+  // (drawn separately in render)
+
+  // Flagpole at x=198
+  // (drawn separately)
+}
+
+function addPipe(x, topY, height) {
+  level[topY][x] = 7;
+  level[topY][x+1] = 8;
+  for(let dy = 1; dy < height; dy++) {
+    if(topY+dy < 13) {
+      level[topY+dy][x] = 9;
+      level[topY+dy][x+1] = 10;
+    }
+  }
+}
+
+buildLevel();
+
+// ============================================================
+// ENTITIES
+// ============================================================
+// Enemies
+let enemies = [];
+function spawnEnemies() {
+  enemies = [];
+  // Goombas (x in pixels)
+  const goombaX = [22*16,40*16,51*16,52.5*16,80*16,82*16,97*16,99*16,114*16,115.5*16,124*16,126*16,
+    174*16,175.5*16];
+  goombaX.forEach(x => {
+    enemies.push({type:'goomba', x, y:12*16, w:16, h:16, vx:-0.5, vy:0, alive:true, stomped:false, stompTimer:0, frame:0, frameTimer:0});
+  });
+  // Koopa Troopas
+  enemies.push({type:'koopa', x:107*16, y:11*16, w:16, h:24, vx:-0.5, vy:0, alive:true, stomped:false, shell:false, shellMoving:false, stompTimer:0, frame:0, frameTimer:0, facing:-1});
+  enemies.push({type:'koopa', x:160*16, y:11*16, w:16, h:24, vx:-0.5, vy:0, alive:true, stomped:false, shell:false, shellMoving:false, stompTimer:0, frame:0, frameTimer:0, facing:-1});
+}
+spawnEnemies();
+
+// Items (mushrooms, fire flowers, stars, coins from blocks)
+let items = [];
+// Particles (brick fragments, score popups)
+let particles = [];
+// Coins floating in level
+let levelCoins = [];
+function spawnLevelCoins() {
+  levelCoins = [];
+  // Some coins placed in the air (coin heaven area etc.)
+  const coinPositions = [
+    [33,4],[34,4],[35,4],[36,4],[37,4],[38,4],[39,4],[40,4],
+    [99,4],[100,4],[101,4],[102,4],[103,4],
+    [145,7],[146,7],[147,7],[148,7],
+    [173,4],[174,4],[175,4],
+  ];
+  coinPositions.forEach(([x,y]) => {
+    levelCoins.push({x:x*16+4, y:y*16+4, w:8, h:12, collected:false, frame:0, frameTimer:0});
+  });
+}
+spawnLevelCoins();
+
+// Fireballs
+let fireballs = [];
+
+// ============================================================
+// PLAYER
+// ============================================================
+let mario = {
+  x: 40, y: 13*16, w: 14, h: 16,
+  vx: 0, vy: 0,
+  speed: 0, maxSpeed: 2.5, runMaxSpeed: 4,
+  accel: 0.1, decel: 0.15, skidDecel: 0.3,
+  jumpForce: -9, jumpForceRun: -9.5,
+  onGround: false, jumping: false, jumpHeld: false,
+  facing: 1, frame: 0, frameTimer: 0,
+  state: 'small', // small, big, fire
+  invincible: 0, starPower: 0,
+  dead: false, deathTimer: 0, deathVy: 0,
+  growing: 0, shrinking: 0,
+  score: 0, coins: 0, lives: 3, time: 400, timeTimer: 0,
+  // Flagpole
+  onFlag: false, flagY: 0, flagTimer: 0,
+  // Walking to castle
+  walkToCastle: false, castleX: 0,
+  // Shell kick cooldown to prevent oscillation
+  shellKickCooldown: 0,
+};
+
+// ============================================================
+// CAMERA
+// ============================================================
+let camera = { x: 0 };
+
+// ============================================================
+// INPUT
+// ============================================================
+const keys = {};
+document.addEventListener('keydown', e => {
+  if(overlay.style.display !== 'none') {
+    overlay.style.display = 'none';
+    initAudio();
+    gameState = 'playing';
+    return;
+  }
+  keys[e.code] = true;
+  e.preventDefault();
+});
+document.addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ============================================================
+// GAME STATE
+// ============================================================
+let gameState = 'title'; // title, playing, dying, gameover, levelcomplete
+let globalTimer = 0;
+let flagScoreAwarded = false;
+
+// ============================================================
+// COLLISION HELPERS
+// ============================================================
+function getTile(tx, ty) {
+  if(tx < 0 || tx >= LEVEL_WIDTH || ty < 0 || ty >= LEVEL_HEIGHT) return 0;
+  return level[ty][tx];
+}
+
+function isSolid(tile) {
+  return tile >= 1 && tile <= 10;
+}
+
+function worldCollide(x, y, w, h) {
+  // Check all corners and edges
+  let left = Math.floor(x / T);
+  let right = Math.floor((x + w - 1) / T);
+  let top = Math.floor(y / T);
+  let bottom = Math.floor((y + h - 1) / T);
+  for(let ty = top; ty <= bottom; ty++) {
+    for(let tx = left; tx <= right; tx++) {
+      if(isSolid(getTile(tx, ty))) return true;
+    }
+  }
+  return false;
+}
+
+function rectOverlap(a, b) {
+  return a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y;
+}
+
+// ============================================================
+// BLOCK INTERACTION
+// ============================================================
+function hitBlock(tx, ty, fromBelow) {
+  let tile = getTile(tx, ty);
+  if(tile === 3) { // Question block with coin
+    level[ty][tx] = 6;
+    mario.coins++;
+    mario.score += 200;
+    if(mario.coins >= 100) { mario.coins = 0; mario.lives++; playSound('1up'); }
+    playSound('coin');
+    particles.push({type:'score', x:tx*T+4, y:ty*T-8, text:'200', timer:40, vy:-1});
+    particles.push({type:'coinAnim', x:tx*T+4, y:ty*T, vy:-6, timer:30});
+  } else if(tile === 4) { // Question block with mushroom/fire flower
+    level[ty][tx] = 6;
+    if(mario.state === 'small') {
+      items.push({type:'mushroom', x:tx*T, y:ty*T, w:16, h:16, vx:1.5, vy:0, emerging:true, emergeY:ty*T, emergeTarget:ty*T-16, active:true});
+    } else {
+      items.push({type:'fireFlower', x:tx*T, y:ty*T, w:16, h:16, emerging:true, emergeY:ty*T, emergeTarget:ty*T-16, active:true, frame:0, frameTimer:0});
+    }
+    playSound('powerup');
+  } else if(tile === 2) { // Brick
+    if(mario.state !== 'small') {
+      level[ty][tx] = 0;
+      playSound('break');
+      // Brick fragments
+      for(let i = 0; i < 4; i++) {
+        particles.push({
+          type:'brick', x:tx*T+(i%2)*8, y:ty*T+Math.floor(i/2)*8,
+          vx:(i%2===0?-1.5:1.5)+(Math.random()-0.5), vy:-4-Math.random()*3, timer:60
+        });
+      }
+    } else {
+      playSound('bump');
+    }
+  } else if(tile === 5 || tile === 1) {
+    playSound('bump');
+  }
+}
+
+// ============================================================
+// MARIO UPDATE
+// ============================================================
+function updateMario() {
+  if(mario.dead) {
+    mario.deathTimer--;
+    if(mario.deathTimer > 20) { /* pause */ }
+    else { mario.deathVy += GRAVITY * 0.5; mario.y += mario.deathVy; }
+    if(mario.deathTimer <= 0) {
+      mario.lives--;
+      if(mario.lives <= 0) {
+        gameState = 'gameover';
+        playSound('gameover');
+      } else {
+        resetLevel();
+      }
+    }
+    return;
+  }
+
+  if(mario.onFlag) {
+    // Slide down flagpole
+    mario.y += 2;
+    if(mario.y >= 13*16) {
+      mario.y = 13*16;
+      mario.onFlag = false;
+      mario.walkToCastle = true;
+      mario.facing = 1;
+      mario.castleX = 204 * 16;
+    }
+    return;
+  }
+
+  if(mario.walkToCastle) {
+    mario.frame = 1;
+    mario.frameTimer++;
+    if(mario.frameTimer > 6) { mario.frameTimer=0; mario.frame = mario.frame===0?1:0; }
+    mario.x += 1;
+    if(mario.x >= mario.castleX) {
+      mario.score += mario.time * 50;
+      gameState = 'levelcomplete';
+    }
+    return;
+  }
+
+  if(mario.shellKickCooldown > 0) mario.shellKickCooldown--;
+  let skipInput = mario.growing > 0 || mario.shrinking > 0;
+  if(mario.growing > 0) mario.growing--;
+  if(mario.shrinking > 0) mario.shrinking--;
+
+  // Timers
+  if(mario.invincible > 0) mario.invincible--;
+  if(mario.starPower > 0) mario.starPower--;
+
+  // Time
+  mario.timeTimer++;
+  if(mario.timeTimer >= 24 && mario.time > 0) {
+    mario.timeTimer = 0;
+    mario.time--;
+    if(mario.time <= 0) { killMario(); return; }
+  }
+
+  if(!skipInput) {
+    let running = keys['ShiftLeft'] || keys['ShiftRight'];
+    let maxSpd = running ? mario.runMaxSpeed : mario.maxSpeed;
+
+    // Horizontal movement
+    if(keys['ArrowLeft']) {
+      if(mario.vx > 0) { mario.vx -= mario.skidDecel; if(mario.vx < 0) mario.vx = 0; }
+      else { mario.vx -= mario.accel; mario.facing = -1; }
+      if(mario.vx < -maxSpd) mario.vx = -maxSpd;
+    } else if(keys['ArrowRight']) {
+      if(mario.vx < 0) { mario.vx += mario.skidDecel; if(mario.vx > 0) mario.vx = 0; }
+      else { mario.vx += mario.accel; mario.facing = 1; }
+      if(mario.vx > maxSpd) mario.vx = maxSpd;
+    } else {
+      if(mario.vx > 0) { mario.vx -= mario.decel; if(mario.vx < 0) mario.vx = 0; }
+      if(mario.vx < 0) { mario.vx += mario.decel; if(mario.vx > 0) mario.vx = 0; }
+    }
+
+    // Jump
+    let jumpKey = keys['ArrowUp'] || keys['Space'];
+    if(jumpKey && mario.onGround && !mario.jumpHeld) {
+      let jf = Math.abs(mario.vx) > 2 ? mario.jumpForceRun : mario.jumpForce;
+      mario.vy = jf;
+      mario.onGround = false;
+      mario.jumping = true;
+      mario.jumpHeld = true;
+      playSound('jump');
+    }
+    if(!jumpKey) mario.jumpHeld = false;
+    // Variable jump height
+    if(!jumpKey && mario.vy < -2) mario.vy = -2;
+  }
+
+  // Apply gravity
+  mario.vy += GRAVITY;
+  if(mario.vy > MAX_FALL) mario.vy = MAX_FALL;
+
+  // Move X
+  mario.x += mario.vx;
+  // Camera boundary
+  if(mario.x < camera.x) mario.x = camera.x;
+  if(mario.x < 0) mario.x = 0;
+  // Level boundary
+  if(mario.x > (LEVEL_WIDTH-2)*T) mario.x = (LEVEL_WIDTH-2)*T;
+
+  // X collision
+  let marioH = mario.state === 'small' ? 16 : 32;
+  if(worldCollide(mario.x, mario.y - marioH, mario.w, marioH)) {
+    if(mario.vx > 0) mario.x = Math.floor((mario.x + mario.w) / T) * T - mario.w;
+    else mario.x = Math.ceil(mario.x / T) * T;
+    mario.vx = 0;
+  }
+
+  // Move Y
+  mario.y += mario.vy;
+  mario.onGround = false;
+  if(worldCollide(mario.x, mario.y - marioH, mario.w, marioH)) {
+    if(mario.vy > 0) {
+      // Landing on ground/block from above
+      mario.y = Math.floor(mario.y / T) * T;
+      mario.vy = 0;
+      mario.onGround = true;
+      mario.jumping = false;
+    } else {
+      // Hitting block from below — find the ACTUAL block that was hit
+      // BEFORE snapping: mario's head was at (mario.y - marioH), check tiles at head row
+      let headRow = Math.floor((mario.y - marioH) / T);
+      for(let tx = Math.floor(mario.x/T); tx <= Math.floor((mario.x+mario.w-1)/T); tx++) {
+        if(isSolid(getTile(tx, headRow))) { hitBlock(tx, headRow, true); }
+      }
+      mario.y = (headRow + 1) * T + marioH;
+      mario.vy = 0;
+    }
+  }
+
+  // Fall into pit
+  if(mario.y > LEVEL_HEIGHT * T) {
+    killMario();
+    return;
+  }
+
+  // Fireball
+  if(!skipInput && mario.state === 'fire' && keys['KeyZ'] && fireballs.length < 2) {
+    fireballs.push({x:mario.x+mario.facing*8, y:mario.y+4, vx:mario.facing*4, vy:0, bouncing:true, active:true});
+    playSound('fireball');
+    keys['KeyZ'] = false; // prevent spam
+  }
+
+  // Animation
+  if(!mario.onGround) {
+    mario.frame = 5; // jump frame
+  } else if(Math.abs(mario.vx) > 0.2) {
+    mario.frameTimer++;
+    let spd = Math.max(2, 8 - Math.floor(Math.abs(mario.vx)*2));
+    if(mario.frameTimer > spd) {
+      mario.frameTimer = 0;
+      mario.frame = mario.frame === 1 ? 2 : 1;
+    }
+  } else {
+    mario.frame = 0;
+  }
+
+  // Flagpole detection
+  let flagpoleX = 198 * 16;
+  if(mario.x + mario.w >= flagpoleX && mario.x <= flagpoleX + 10 && !mario.onFlag && !flagScoreAwarded) {
+    mario.onFlag = true;
+    mario.vx = 0;
+    mario.vy = 0;
+    mario.x = flagpoleX - mario.w;
+    // Score based on height
+    let flagScore = 100;
+    if(mario.y < 4*16) flagScore = 5000;
+    else if(mario.y < 6*16) flagScore = 2000;
+    else if(mario.y < 8*16) flagScore = 800;
+    else if(mario.y < 10*16) flagScore = 400;
+    mario.score += flagScore;
+    flagScoreAwarded = true;
+    playSound('flagpole');
+    particles.push({type:'score', x:flagpoleX+8, y:mario.y-16, text:String(flagScore), timer:60, vy:-1});
+  }
+}
+
+function killMario() {
+  if(mario.invincible > 0) return;
+  if(mario.state !== 'small') {
+    mario.state = 'small';
+    mario.invincible = 120;
+    mario.shrinking = 30;
+    playSound('bump');
+    return;
+  }
+  mario.dead = true;
+  mario.deathTimer = 90;
+  mario.deathVy = -6;
+  mario.vx = 0;
+  playSound('die');
+  gameState = 'dying';
+}
+
+function resetLevel() {
+  mario.x = 40; mario.y = 13*16;
+  mario.vx = 0; mario.vy = 0;
+  mario.dead = false; mario.state = 'small'; mario.h = 16;
+  mario.invincible = 0; mario.starPower = 0;
+  mario.growing = 0; mario.shrinking = 0; mario.shellKickCooldown = 0;
+  mario.time = 400; mario.timeTimer = 0;
+  mario.onFlag = false; mario.walkToCastle = false;
+  flagScoreAwarded = false;
+  camera.x = 0;
+  fireballs = []; items = []; particles = [];
+  buildLevel();
+  spawnEnemies();
+  spawnLevelCoins();
+  gameState = 'playing';
+}
+
+// ============================================================
+// ENEMY UPDATE
+// ============================================================
+function updateEnemies() {
+  enemies.forEach(e => {
+    if(!e.alive) return;
+    if(e.stomped) {
+      e.stompTimer--;
+      if(e.stompTimer <= 0) e.alive = false;
+      return;
+    }
+
+    // Only update if near camera
+    if(e.x < camera.x - 32 || e.x > camera.x + NES_W + 32) return;
+
+    // Gravity
+    e.vy += GRAVITY;
+    if(e.vy > MAX_FALL) e.vy = MAX_FALL;
+
+    // Move X
+    e.x += e.vx;
+    // X collision with tiles
+    if(worldCollide(e.x, e.y, e.w, e.h)) {
+      if(e.vx > 0) e.x = Math.floor((e.x + e.w)/T)*T - e.w;
+      else e.x = Math.ceil(e.x/T)*T;
+      e.vx = -e.vx;
+      if(e.facing !== undefined) e.facing = e.vx > 0 ? 1 : -1;
+    }
+
+    // Move Y
+    e.y += e.vy;
+    if(worldCollide(e.x, e.y, e.w, e.h)) {
+      if(e.vy > 0) {
+        e.y = Math.floor((e.y + e.h)/T)*T - e.h;
+        e.vy = 0;
+      } else {
+        e.y = Math.ceil(e.y/T)*T;
+        e.vy = 0;
+      }
+    }
+
+    // Fall into pit
+    if(e.y > LEVEL_HEIGHT * T + 32) e.alive = false;
+
+    // Shell behavior
+    if(e.type === 'koopa' && e.shell && e.shellMoving) {
+      // Shell kills other enemies
+      enemies.forEach(other => {
+        if(other === e || !other.alive || other.stomped) return;
+        if(rectOverlap({x:e.x,y:e.y,w:e.w,h:e.h},{x:other.x,y:other.y,w:other.w,h:other.h})) {
+          other.alive = false;
+          mario.score += 100;
+          particles.push({type:'score', x:other.x, y:other.y-8, text:'100', timer:40, vy:-1});
+        }
+      });
+    }
+
+    // Animation
+    e.frameTimer++;
+    if(e.frameTimer > 12) { e.frameTimer=0; e.frame = e.frame===0?1:0; }
+  });
+}
+
+// ============================================================
+// ITEMS UPDATE
+// ============================================================
+function updateItems() {
+  items.forEach(item => {
+    if(!item.active) return;
+
+    if(item.emerging) {
+      item.y -= 0.5;
+      if(item.y <= item.emergeTarget) {
+        item.y = item.emergeTarget;
+        item.emerging = false;
+      }
+      return;
+    }
+
+    if(item.type === 'mushroom') {
+      item.vy += GRAVITY;
+      if(item.vy > MAX_FALL) item.vy = MAX_FALL;
+      item.x += item.vx;
+      if(worldCollide(item.x, item.y, item.w, item.h)) {
+        if(item.vx > 0) item.x = Math.floor((item.x + item.w)/T)*T - item.w;
+        else item.x = Math.ceil(item.x/T)*T;
+        item.vx = -item.vx;
+      }
+      item.y += item.vy;
+      if(worldCollide(item.x, item.y, item.w, item.h)) {
+        if(item.vy > 0) {
+          item.y = Math.floor((item.y+item.h)/T)*T - item.h;
+          item.vy = 0;
+        }
+      }
+      // Collect
+      let mcH = mario.state==='small'?16:32;
+      if(rectOverlap({x:mario.x,y:mario.y-mcH,w:mario.w,h:mcH},{x:item.x,y:item.y,w:item.w,h:item.h})) {
+        item.active = false;
+        if(mario.state === 'small') {
+          mario.state = 'big';
+          mario.growing = 30;
+        }
+        mario.score += 1000;
+        playSound('powerup');
+        particles.push({type:'score', x:item.x, y:item.y-8, text:'1000', timer:40, vy:-1});
+      }
+    }
+
+    if(item.type === 'fireFlower') {
+      let ffH = mario.state==='small'?16:32;
+      if(!item.emerging && rectOverlap({x:mario.x,y:mario.y-ffH,w:mario.w,h:ffH},{x:item.x,y:item.y,w:item.w,h:item.h})) {
+        item.active = false;
+        if(mario.state === 'small') mario.growing = 30;
+        mario.state = 'fire';
+        mario.score += 1000;
+        playSound('powerup');
+        particles.push({type:'score', x:item.x, y:item.y-8, text:'1000', timer:40, vy:-1});
+      }
+      item.frameTimer++;
+      if(item.frameTimer > 8) { item.frameTimer=0; item.frame=(item.frame+1)%4; }
+    }
+
+    if(item.type === 'star') {
+      item.vy += GRAVITY * 0.5;
+      item.x += item.vx;
+      if(worldCollide(item.x, item.y, item.w, item.h)) item.vx = -item.vx;
+      item.y += item.vy;
+      if(worldCollide(item.x, item.y, item.w, item.h)) {
+        if(item.vy > 0) { item.y = Math.floor((item.y+item.h)/T)*T - item.h; item.vy = -6; }
+      }
+      let stH = mario.state==='small'?16:32;
+      if(rectOverlap({x:mario.x,y:mario.y-stH,w:mario.w,h:stH},{x:item.x,y:item.y,w:item.w,h:item.h})) {
+        item.active = false;
+        mario.starPower = 600;
+        mario.score += 1000;
+        playSound('powerup');
+      }
+    }
+
+    if(item.y > LEVEL_HEIGHT*T+32) item.active = false;
+  });
+  items = items.filter(i => i.active);
+}
+
+// ============================================================
+// FIREBALLS UPDATE
+// ============================================================
+function updateFireballs() {
+  fireballs.forEach(fb => {
+    if(!fb.active) return;
+    fb.vy += GRAVITY;
+    fb.x += fb.vx;
+    if(worldCollide(fb.x, fb.y, 4, 4)) { fb.active = false; return; }
+    fb.y += fb.vy;
+    if(worldCollide(fb.x, fb.y, 4, 4)) {
+      fb.y = Math.floor((fb.y+4)/T)*T - 4;
+      fb.vy = -4;
+    }
+    // Hit enemies
+    enemies.forEach(e => {
+      if(!e.alive || e.stomped) return;
+      if(rectOverlap({x:fb.x,y:fb.y,w:4,h:4},{x:e.x,y:e.y,w:e.w,h:e.h})) {
+        e.alive = false;
+        fb.active = false;
+        mario.score += 100;
+        particles.push({type:'score', x:e.x, y:e.y-8, text:'100', timer:40, vy:-1});
+        playSound('stomp');
+      }
+    });
+    if(fb.y > LEVEL_HEIGHT*T || fb.x < camera.x-16 || fb.x > camera.x+NES_W+16) fb.active = false;
+  });
+  fireballs = fireballs.filter(f => f.active);
+}
+
+// ============================================================
+// PARTICLES UPDATE
+// ============================================================
+function updateParticles() {
+  particles.forEach(p => {
+    p.timer--;
+    if(p.type === 'brick') {
+      p.vy += GRAVITY * 0.5;
+      p.x += p.vx;
+      p.y += p.vy;
+    }
+    if(p.type === 'coinAnim') {
+      p.vy += 0.3;
+      p.y += p.vy;
+    }
+  });
+  particles = particles.filter(p => p.timer > 0);
+
+  // Level coins animation
+  levelCoins.forEach(c => {
+    if(c.collected) return;
+    c.frameTimer++;
+    if(c.frameTimer > 8) { c.frameTimer=0; c.frame=(c.frame+1)%4; }
+    // Collect
+    let cnH = mario.state==='small'?16:32;
+    if(!mario.dead && rectOverlap({x:mario.x,y:mario.y-cnH,w:mario.w,h:cnH},{x:c.x,y:c.y,w:c.w,h:c.h})) {
+      c.collected = true;
+      mario.coins++;
+      mario.score += 200;
+      if(mario.coins >= 100) { mario.coins=0; mario.lives++; playSound('1up'); }
+      playSound('coin');
+      particles.push({type:'score', x:c.x, y:c.y-8, text:'200', timer:40, vy:-1});
+    }
+  });
+}
+
+// ============================================================
+// ENEMY-MARIO COLLISION
+// ============================================================
+function checkEnemyCollisions() {
+  if(mario.dead || mario.onFlag || mario.walkToCastle || mario.invincible > 0) return;
+  let mh = mario.state==='small'?16:32;
+
+  enemies.forEach(e => {
+    if(!e.alive || e.stomped) return;
+    if(mario.starPower > 0) {
+      if(rectOverlap({x:mario.x,y:mario.y-mh,w:mario.w,h:mh},{x:e.x,y:e.y,w:e.w,h:e.h})) {
+        e.alive = false;
+        mario.score += 200;
+        particles.push({type:'score', x:e.x, y:e.y-8, text:'200', timer:40, vy:-1});
+        playSound('stomp');
+      }
+      return;
+    }
+    if(rectOverlap({x:mario.x,y:mario.y-mh,w:mario.w,h:mh},{x:e.x,y:e.y,w:e.w,h:e.h})) {
+      // Check if stomping (mario falling onto enemy)
+      if(mario.vy > 0 && mario.y - mario.vy <= e.y + 4) {
+        // Stomp!
+        mario.vy = -5;
+        if(e.type === 'goomba') {
+          e.stomped = true;
+          e.stompTimer = 30;
+          e.h = 8;
+          e.y += 8;
+        } else if(e.type === 'koopa') {
+          if(!e.shell) {
+            e.shell = true;
+            e.shellMoving = false;
+            e.h = 16;
+            e.y += 8;
+            e.vx = 0;
+          } else if(!e.shellMoving) {
+            e.shellMoving = true;
+            e.vx = mario.x < e.x ? 4 : -4;
+          } else {
+            e.shellMoving = false;
+            e.vx = 0;
+          }
+        }
+        mario.score += 100;
+        playSound('stomp');
+        particles.push({type:'score', x:e.x, y:e.y-8, text:'100', timer:40, vy:-1});
+      } else {
+        // Hit by enemy
+        if(e.shell && !e.shellMoving && mario.shellKickCooldown <= 0) {
+          // Kick stationary shell
+          e.shellMoving = true;
+          e.vx = mario.x < e.x ? 4 : -4;
+          mario.shellKickCooldown = 15;
+          playSound('stomp');
+        } else {
+          killMario();
+        }
+      }
+    }
+  });
+}
+
+// ============================================================
+// CAMERA UPDATE
+// ============================================================
+function updateCamera() {
+  let targetX = mario.x - NES_W/2 + mario.w/2;
+  if(targetX > camera.x) camera.x = targetX;
+  if(camera.x < 0) camera.x = 0;
+  let maxCam = (LEVEL_WIDTH - NES_W/T) * T;
+  if(camera.x > maxCam) camera.x = maxCam;
+}
+
+// ============================================================
+// RENDERING
+// ============================================================
+function drawPixelRect(x, y, w, h, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(Math.round(x*SCALE), Math.round(y*SCALE), w*SCALE, h*SCALE);
+}
+
+function drawText(text, x, y, color, size) {
+  ctx.fillStyle = color || PAL.text;
+  ctx.font = `${(size||8)*SCALE}px monospace`;
+  ctx.fillText(text, x*SCALE, y*SCALE);
+}
+
+function renderBackground() {
+  // Sky
+  ctx.fillStyle = PAL.sky;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+function renderTiles() {
+  let startTx = Math.floor(camera.x / T);
+  let endTx = startTx + Math.ceil(NES_W / T) + 1;
+
+  for(let ty = 0; ty < LEVEL_HEIGHT; ty++) {
+    for(let tx = startTx; tx <= endTx && tx < LEVEL_WIDTH; tx++) {
+      let tile = level[ty][tx];
+      let x = tx * T - camera.x;
+      let y = ty * T;
+
+      switch(tile) {
+        case 1: // Ground
+          drawPixelRect(x, y, T, T, PAL.ground1);
+          drawPixelRect(x+1, y+1, T-2, T-2, PAL.ground2);
+          // Surface decoration
+          if(ty === 13) {
+            drawPixelRect(x, y, T, 2, '#e09050');
+          }
+          break;
+        case 2: // Brick
+          drawBrick(x, y);
+          break;
+        case 3: // Question block (coin)
+          drawQuestionBlock(x, y);
+          break;
+        case 4: // Question block (mushroom)
+          drawQuestionBlock(x, y);
+          break;
+        case 5: // Hard block
+          drawHardBlock(x, y);
+          break;
+        case 6: // Used block
+          drawUsedBlock(x, y);
+          break;
+        case 7: // Pipe top left
+          drawPipeTile(x, y, true, true);
+          break;
+        case 8: // Pipe top right
+          drawPipeTile(x, y, true, false);
+          break;
+        case 9: // Pipe body left
+          drawPipeTile(x, y, false, true);
+          break;
+        case 10: // Pipe body right
+          drawPipeTile(x, y, false, false);
+          break;
+      }
+    }
+  }
+}
+
+function drawBrick(x, y) {
+  drawPixelRect(x, y, T, T, PAL.brick1);
+  // Brick pattern
+  drawPixelRect(x, y, T, 1, PAL.brickLine);
+  drawPixelRect(x, y+7, T, 1, PAL.brickLine);
+  drawPixelRect(x, y+8, T, 1, '#6a2400');
+  drawPixelRect(x+7, y, 1, 8, PAL.brickLine);
+  drawPixelRect(x+15, y, 1, 8, PAL.brickLine);
+  drawPixelRect(x+3, y+8, 1, 8, PAL.brickLine);
+  drawPixelRect(x+11, y+8, 1, 8, PAL.brickLine);
+  // Highlight
+  drawPixelRect(x+1, y+1, 5, 1, '#e09050');
+  drawPixelRect(x+9, y+1, 5, 1, '#e09050');
+}
+
+function drawQuestionBlock(x, y) {
+  let blink = Math.floor(globalTimer/12) % 4;
+  let baseColor = blink < 2 ? PAL.qblock1 : PAL.qblock2;
+  drawPixelRect(x, y, T, T, baseColor);
+  drawPixelRect(x, y, T, 1, PAL.qblockLine);
+  drawPixelRect(x, y+15, T, 1, PAL.qblockLine);
+  drawPixelRect(x, y, 1, T, PAL.qblockLine);
+  drawPixelRect(x+15, y, 1, T, PAL.qblockLine);
+  // Question mark
+  drawPixelRect(x+5, y+3, 4, 2, '#886400');
+  drawPixelRect(x+9, y+3, 2, 4, '#886400');
+  drawPixelRect(x+7, y+5, 2, 3, '#886400');
+  drawPixelRect(x+7, y+9, 2, 2, '#886400');
+}
+
+function drawUsedBlock(x, y) {
+  drawPixelRect(x, y, T, T, PAL.usedBlock);
+  drawPixelRect(x, y, T, 1, '#6a2400');
+  drawPixelRect(x, y+15, T, 1, '#6a2400');
+  drawPixelRect(x, y, 1, T, '#6a2400');
+  drawPixelRect(x+15, y, 1, T, '#6a2400');
+}
+
+function drawHardBlock(x, y) {
+  drawPixelRect(x, y, T, T, '#a43400');
+  drawPixelRect(x+1, y+1, T-2, T-2, '#c84c0c');
+  drawPixelRect(x+2, y+2, T-4, T-4, '#e09050');
+  drawPixelRect(x, y, T, 1, '#6a2400');
+  drawPixelRect(x, y+15, T, 1, '#6a2400');
+  drawPixelRect(x, y, 1, T, '#6a2400');
+  drawPixelRect(x+15, y, 1, T, '#6a2400');
+}
+
+function drawPipeTile(x, y, isTop, isLeft) {
+  if(isTop) {
+    if(isLeft) {
+      drawPixelRect(x, y, T, T, PAL.pipe1);
+      drawPixelRect(x, y, 16, T, PAL.pipe2);
+      drawPixelRect(x, y, T, 2, PAL.pipe2);
+      drawPixelRect(x+2, y, 1, T, '#005800');
+    } else {
+      drawPixelRect(x, y, T, T, PAL.pipe1);
+      drawPixelRect(x+2, y, 14, T, PAL.pipe2);
+      drawPixelRect(x, y, T, 2, PAL.pipe2);
+      drawPixelRect(x+13, y, 1, T, '#005800');
+      drawPixelRect(x+15, y, 1, T, '#005800');
+    }
+  } else {
+    if(isLeft) {
+      drawPixelRect(x, y, T, T, PAL.pipe1);
+      drawPixelRect(x+3, y, 13, T, PAL.pipe2);
+      drawPixelRect(x+2, y, 1, T, '#005800');
+    } else {
+      drawPixelRect(x, y, T, T, PAL.pipe1);
+      drawPixelRect(x+3, y, 10, T, PAL.pipe2);
+      drawPixelRect(x+13, y, 1, T, '#005800');
+      drawPixelRect(x+15, y, 1, T, PAL.pipeDark);
+    }
+  }
+}
+
+function renderEntities() {
+  // Level coins
+  levelCoins.forEach(c => {
+    if(c.collected) return;
+    let x = c.x - camera.x;
+    let y = c.y;
+    if(x < -16 || x > NES_W+16) return;
+    drawCoinSprite(x, y, c.frame);
+  });
+
+  // Items
+  items.forEach(item => {
+    if(!item.active) return;
+    let x = item.x - camera.x;
+    if(x < -16 || x > NES_W+16) return;
+    if(item.type === 'mushroom') drawMushroom(x, item.y);
+    if(item.type === 'fireFlower') drawFireFlower(x, item.y, item.frame);
+    if(item.type === 'star') drawStar(x, item.y);
+  });
+
+  // Enemies
+  enemies.forEach(e => {
+    if(!e.alive) return;
+    let x = e.x - camera.x;
+    if(x < -16 || x > NES_W+16) return;
+    if(e.type === 'goomba') drawGoomba(x, e.y, e.stomped, e.frame);
+    if(e.type === 'koopa') drawKoopa(x, e.y, e.shell, e.shellMoving, e.frame, e.facing);
+  });
+
+  // Fireballs
+  fireballs.forEach(fb => {
+    if(!fb.active) return;
+    let x = fb.x - camera.x;
+    drawPixelRect(x, fb.y, 4, 4, '#fcb040');
+    drawPixelRect(x+1, fb.y+1, 2, 2, '#e52521');
+  });
+}
+
+function drawCoinSprite(x, y, frame) {
+  let widths = [8,6,4,6];
+  let w = widths[frame];
+  let ox = (8-w)/2;
+  drawPixelRect(x+ox, y, w, 12, PAL.coin);
+  drawPixelRect(x+ox+1, y+1, Math.max(1,w-2), 10, '#fcd890');
+}
+
+function drawMushroom(x, y) {
+  // Cap
+  drawPixelRect(x+2, y, 12, 8, PAL.mushroom1);
+  drawPixelRect(x+4, y+2, 4, 4, PAL.mushroom2);
+  drawPixelRect(x+10, y+2, 2, 4, PAL.mushroom2);
+  // Stem
+  drawPixelRect(x+4, y+8, 8, 8, PAL.mushroom2);
+  drawPixelRect(x+5, y+8, 2, 8, '#fcb8a0');
+  // Eyes
+  drawPixelRect(x+6, y+10, 2, 2, '#000');
+  drawPixelRect(x+10, y+10, 2, 2, '#000');
+}
+
+function drawFireFlower(x, y, frame) {
+  let colors = [['#e52521','#fcb040'],['#00a800','#fcb040'],['#0058fc','#fcb040'],['#fcb040','#e52521']];
+  let c = colors[frame % 4];
+  drawPixelRect(x+6, y, 4, 4, c[0]);
+  drawPixelRect(x+2, y+4, 12, 4, c[0]);
+  drawPixelRect(x+6, y+4, 4, 4, c[1]);
+  drawPixelRect(x+4, y+8, 8, 4, c[0]);
+  drawPixelRect(x+6, y+8, 4, 4, c[1]);
+  drawPixelRect(x+6, y+12, 4, 4, '#00a800');
+}
+
+function drawStar(x, y) {
+  let t = Math.floor(globalTimer/4)%2;
+  let c1 = t===0 ? '#fcb040' : '#00fc00';
+  let c2 = t===0 ? '#00fc00' : '#fcb040';
+  drawPixelRect(x+6, y, 4, 4, c1);
+  drawPixelRect(x+2, y+4, 12, 4, c1);
+  drawPixelRect(x+4, y+2, 8, 2, c2);
+  drawPixelRect(x, y+4, 16, 8, c1);
+  drawPixelRect(x+2, y+12, 12, 2, c1);
+  drawPixelRect(x+4, y+8, 8, 4, c2);
+  // Eyes
+  drawPixelRect(x+5, y+6, 2, 2, '#000');
+  drawPixelRect(x+9, y+6, 2, 2, '#000');
+}
+
+function drawGoomba(x, y, stomped, frame) {
+  if(stomped) {
+    drawPixelRect(x, y, 16, 8, PAL.goomba1);
+    drawPixelRect(x+2, y+2, 4, 3, '#000');
+    drawPixelRect(x+10, y+2, 4, 3, '#000');
+    return;
+  }
+  // Body
+  drawPixelRect(x+2, y, 12, 8, PAL.goomba1);
+  drawPixelRect(x+4, y+2, 8, 4, PAL.goombaLight);
+  // Eyes
+  drawPixelRect(x+4, y+2, 3, 3, '#fff');
+  drawPixelRect(x+5, y+3, 2, 2, '#000');
+  drawPixelRect(x+9, y+2, 3, 3, '#fff');
+  drawPixelRect(x+10, y+3, 2, 2, '#000');
+  // Lower body
+  drawPixelRect(x, y+8, 16, 4, PAL.goomba2);
+  // Feet
+  if(frame === 0) {
+    drawPixelRect(x+1, y+12, 6, 4, PAL.goomba2);
+    drawPixelRect(x+9, y+12, 6, 4, PAL.goomba2);
+  } else {
+    drawPixelRect(x+2, y+12, 5, 4, PAL.goomba2);
+    drawPixelRect(x+9, y+12, 5, 4, PAL.goomba2);
+  }
+}
+
+function drawKoopa(x, y, shell, shellMoving, frame, facing) {
+  if(shell) {
+    // Shell
+    drawPixelRect(x, y+4, 16, 12, PAL.koopa1);
+    drawPixelRect(x+2, y+2, 12, 14, PAL.koopa2);
+    drawPixelRect(x+4, y+6, 8, 8, PAL.koopa1);
+    // Shell lines
+    drawPixelRect(x+7, y+4, 2, 12, '#005800');
+    if(shellMoving && Math.floor(globalTimer/3)%2===0) {
+      drawPixelRect(x+1, y+8, 2, 2, '#fff');
+      drawPixelRect(x+13, y+8, 2, 2, '#fff');
+    }
+    return;
+  }
+  // Head
+  drawPixelRect(x+4, y, 10, 8, PAL.koopa2);
+  drawPixelRect(x+6, y+2, 4, 4, '#fff');
+  drawPixelRect(x+7, y+3, 2, 2, '#000');
+  // Body/shell
+  drawPixelRect(x+2, y+8, 12, 8, PAL.koopa1);
+  drawPixelRect(x+4, y+10, 8, 6, PAL.koopa2);
+  // Feet
+  if(frame === 0) {
+    drawPixelRect(x+2, y+16, 5, 8, PAL.koopaYellow);
+    drawPixelRect(x+9, y+16, 5, 8, PAL.koopaYellow);
+  } else {
+    drawPixelRect(x+3, y+16, 4, 8, PAL.koopaYellow);
+    drawPixelRect(x+9, y+16, 4, 8, PAL.koopaYellow);
+  }
+}
+
+function renderMario() {
+  if(mario.dead && mario.deathTimer > 0) {
+    let x = mario.x - camera.x;
+    drawMarioSprite(x, mario.y, 'small', 0, 1, false, true);
+    return;
+  }
+  if(mario.growing > 0 || mario.shrinking > 0) {
+    // Flashing effect
+    if(Math.floor(globalTimer/3)%2===0) return;
+  }
+  if(mario.invincible > 0 && Math.floor(globalTimer/2)%3===0 && mario.starPower <= 0) return;
+
+  let x = mario.x - camera.x;
+  let fire = mario.state === 'fire';
+  let starColors = null;
+  if(mario.starPower > 0) {
+    let ci = Math.floor(globalTimer/4) % 3;
+    starColors = [['#e52521','#00a800','#fcb040'],['#00a800','#fcb040','#e52521'],['#fcb040','#e52521','#00a800']][ci];
+  }
+  let spriteY = mario.state === 'small' ? mario.y - 16 : mario.y - 28;
+  drawMarioSprite(x, spriteY, mario.state, mario.frame, mario.facing, fire, false, starColors);
+}
+
+function drawMarioSprite(x, y, state, frame, facing, fire, dead, starColors) {
+  let big = state !== 'small';
+  let c1 = fire ? PAL.marioFire2 : (starColors ? starColors[0] : PAL.marioRed);
+  let c2 = fire ? PAL.white : (starColors ? starColors[1] : PAL.marioBrown);
+  let c3 = PAL.marioSkin;
+  let c4 = fire ? PAL.marioFire2 : (starColors ? starColors[2] : PAL.marioRed);
+
+  if(dead) {
+    // Dead mario
+    drawPixelRect(x+3, y, 8, 8, c3);
+    drawPixelRect(x+4, y+2, 2, 2, '#000');
+    drawPixelRect(x+8, y+2, 2, 2, '#000');
+    drawPixelRect(x+2, y+8, 10, 4, c1);
+    drawPixelRect(x+1, y+8, 2, 8, c3);
+    drawPixelRect(x+11, y+8, 2, 8, c3);
+    drawPixelRect(x+3, y+12, 4, 4, c2);
+    drawPixelRect(x+7, y+12, 4, 4, c2);
+    return;
+  }
+
+  if(!big) {
+    // Small Mario
+    // Hat
+    drawPixelRect(x+3, y, 8, 3, c1);
+    drawPixelRect(x+2, y+1, 12, 3, c1);
+    // Face
+    drawPixelRect(x+2, y+4, 12, 5, c3);
+    // Eyes
+    drawPixelRect(x+facing>0?7:4, y+5, 2, 2, '#000');
+    // Hair/sideburns
+    drawPixelRect(x+2, y+4, 3, 3, c2);
+    // Mustache area
+    drawPixelRect(x+5, y+7, 6, 2, c2);
+    // Body
+    drawPixelRect(x+2, y+9, 10, 3, c1);
+    // Overalls
+    drawPixelRect(x+3, y+12, 4, 4, c2);
+    drawPixelRect(x+8, y+12, 4, 4, c2);
+    // Buttons
+    drawPixelRect(x+5, y+12, 2, 2, c4);
+    // Shoes
+    drawPixelRect(x+2, y+14, 5, 2, c2);
+    drawPixelRect(x+9, y+14, 5, 2, c2);
+
+    // Running animation - adjust legs
+    if(frame === 1) {
+      drawPixelRect(x+2, y+12, 5, 4, c2);
+      drawPixelRect(x+10, y+12, 3, 2, c2);
+    } else if(frame === 2) {
+      drawPixelRect(x+4, y+12, 3, 4, c2);
+      drawPixelRect(x+8, y+12, 4, 2, c2);
+    }
+    if(frame === 5) { // Jump
+      drawPixelRect(x+1, y+10, 4, 3, c3);
+      drawPixelRect(x+10, y+12, 4, 3, c2);
+    }
+  } else {
+    // Big Mario
+    // Hat
+    drawPixelRect(x+3, y, 8, 3, c1);
+    drawPixelRect(x+2, y+1, 12, 4, c1);
+    // Face
+    drawPixelRect(x+2, y+5, 12, 6, c3);
+    drawPixelRect(x+2, y+5, 3, 4, c2);
+    // Eyes
+    drawPixelRect(x+facing>0?8:4, y+6, 2, 3, '#000');
+    // Mustache
+    drawPixelRect(x+4, y+9, 8, 2, c2);
+    // Body
+    drawPixelRect(x+1, y+11, 14, 5, c1);
+    // Arms
+    drawPixelRect(x, y+12, 3, 4, c3);
+    drawPixelRect(x+13, y+12, 3, 4, c3);
+    // Overalls
+    drawPixelRect(x+3, y+16, 4, 8, c2);
+    drawPixelRect(x+9, y+16, 4, 8, c2);
+    // Overall straps
+    drawPixelRect(x+4, y+12, 3, 4, c2);
+    drawPixelRect(x+9, y+12, 3, 4, c2);
+    // Buttons
+    drawPixelRect(x+5, y+14, 2, 2, c4);
+    drawPixelRect(x+9, y+14, 2, 2, c4);
+    // Shoes
+    drawPixelRect(x+2, y+24, 5, 4, c2);
+    drawPixelRect(x+9, y+24, 5, 4, c2);
+
+    if(frame === 1) {
+      drawPixelRect(x+2, y+22, 5, 6, c2);
+      drawPixelRect(x+10, y+24, 4, 2, c2);
+    } else if(frame === 2) {
+      drawPixelRect(x+4, y+22, 3, 6, c2);
+      drawPixelRect(x+9, y+24, 4, 2, c2);
+    }
+    if(frame === 5) { // Jump
+      drawPixelRect(x, y+14, 4, 4, c3);
+      drawPixelRect(x+12, y+20, 4, 4, c2);
+    }
+  }
+}
+
+function renderParticles() {
+  particles.forEach(p => {
+    let x = p.x - camera.x;
+    if(p.type === 'brick') {
+      drawPixelRect(x, p.y, 6, 6, PAL.brick1);
+      drawPixelRect(x+1, p.y+1, 4, 4, '#e09050');
+    }
+    if(p.type === 'coinAnim') {
+      drawCoinSprite(x, p.y, Math.floor(globalTimer/4)%4);
+    }
+    if(p.type === 'score') {
+      drawText(p.text, x, p.y, '#fff', 8);
+    }
+  });
+}
+
+function renderFlagpole() {
+  let flagX = 198 * 16 - camera.x;
+  if(flagX < -32 || flagX > NES_W+32) return;
+  // Pole
+  drawPixelRect(flagX+7, 3*16, 2, 10*16, '#888');
+  // Ball on top
+  drawPixelRect(flagX+4, 3*16-4, 8, 4, '#00a800');
+  // Flag
+  if(!flagScoreAwarded || mario.onFlag) {
+    let flagY = 3*16;
+    if(mario.onFlag) flagY = Math.min(mario.y, 12*16-16);
+    drawPixelRect(flagX-9, flagY+4, 16, 12, PAL.flagGreen);
+    // Triangle shape
+    drawPixelRect(flagX-7, flagY+6, 12, 8, '#00fc00');
+    drawPixelRect(flagX-5, flagY+8, 8, 4, '#00fc00');
+  } else {
+    // Flag at bottom
+    drawPixelRect(flagX-9, 11*16+4, 16, 12, PAL.flagGreen);
+    drawPixelRect(flagX-7, 11*16+6, 12, 8, '#00fc00');
+  }
+}
+
+function renderCastle() {
+  let cx = 202 * 16 - camera.x;
+  if(cx < -64 || cx > NES_W+64) return;
+  let cy = 8*16;
+
+  // Main body
+  drawPixelRect(cx, cy+16, 48, 48, PAL.castle1);
+  drawPixelRect(cx+2, cy+18, 44, 44, PAL.castle2);
+  // Battlements
+  for(let i = 0; i < 5; i++) {
+    drawPixelRect(cx+i*10, cy+8, 8, 12, PAL.castle1);
+    drawPixelRect(cx+i*10+1, cy+9, 6, 10, PAL.castle2);
+  }
+  // Top battlements
+  for(let i = 0; i < 3; i++) {
+    drawPixelRect(cx+10+i*10, cy, 8, 12, PAL.castle1);
+    drawPixelRect(cx+10+i*10+1, cy+1, 6, 10, PAL.castle2);
+  }
+  // Door
+  drawPixelRect(cx+16, cy+40, 16, 24, '#000');
+  drawPixelRect(cx+18, cy+38, 12, 2, '#886400');
+  // Window
+  drawPixelRect(cx+19, cy+24, 10, 10, '#000');
+  drawPixelRect(cx+20, cy+25, 3, 3, '#5c94fc');
+  drawPixelRect(cx+25, cy+25, 3, 3, '#5c94fc');
+  // Tower
+  drawPixelRect(cx+16, cy-16, 16, 24, PAL.castle1);
+  drawPixelRect(cx+17, cy-14, 14, 20, PAL.castle2);
+  // Tower window
+  drawPixelRect(cx+21, cy-8, 6, 6, '#000');
+  // Flag on tower
+  drawPixelRect(cx+24, cy-28, 2, 14, '#888');
+  drawPixelRect(cx+16, cy-28, 8, 6, PAL.flagGreen);
+}
+
+function renderHUD() {
+  // HUD background (top of screen)
+  // Mario text
+  drawText('MARIO', 3*8, 8, '#fff');
+  drawText(String(mario.score).padStart(6,'0'), 3*8, 16, '#fff');
+
+  // Coins
+  drawPixelRect(90, 16, 8, 8, PAL.coin);
+  drawText('×' + String(mario.coins).padStart(2,'0'), 100, 23, '#fff');
+
+  // World
+  drawText('WORLD', 150, 8, '#fff');
+  drawText(' 1-1', 150, 16, '#fff');
+
+  // Time
+  drawText('TIME', 210, 8, '#fff');
+  drawText(' '+String(mario.time).padStart(3,' '), 210, 16, '#fff');
+
+  // Lives
+  drawText('♥×'+mario.lives, 120, 8, '#fcb040');
+}
+
+// ============================================================
+// GAME OVER / LEVEL COMPLETE OVERLAYS
+// ============================================================
+function renderOverlay() {
+  if(gameState === 'gameover') {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    drawText('GAME OVER', 90, 120, '#e52521', 16);
+    drawText('SCORE: '+mario.score, 88, 148, '#fff', 10);
+    drawText('PRESS ENTER TO RESTART', 55, 180, '#aaa', 8);
+  }
+  if(gameState === 'levelcomplete') {
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    drawText('COURSE CLEAR!', 65, 80, '#fcb040', 16);
+    drawText('SCORE: '+mario.score, 80, 120, '#fff', 12);
+    drawText('COINS: '+mario.coins, 80, 140, '#fcb040', 12);
+    drawText('TIME BONUS: '+mario.time*50, 80, 160, '#fff', 10);
+    drawText('PRESS ENTER TO PLAY AGAIN', 40, 200, '#aaa', 8);
+  }
+}
+
+// ============================================================
+// DECORATIVE ELEMENTS (clouds, bushes, hills)
+// ============================================================
+function renderDecorations() {
+  // Hills
+  const hills = [
+    {x:0, y:11*16, w:80, h:48, c:'#00a800', c2:'#00c800'},
+    {x:16*16, y:10*16, w:48, h:64, c:'#00a800', c2:'#00c800'},
+    {x:48*16, y:11*16, w:80, h:48, c:'#00a800', c2:'#00c800'},
+    {x:64*16, y:10*16, w:48, h:64, c:'#00a800', c2:'#00c800'},
+    {x:96*16, y:11*16, w:80, h:48, c:'#00a800', c2:'#00c800'},
+    {x:112*16, y:10*16, w:48, h:64, c:'#00a800', c2:'#00c800'},
+    {x:144*16, y:11*16, w:80, h:48, c:'#00a800', c2:'#00c800'},
+    {x:160*16, y:10*16, w:48, h:64, c:'#00a800', c2:'#00c800'},
+    {x:192*16, y:11*16, w:80, h:48, c:'#00a800', c2:'#00c800'},
+  ];
+  hills.forEach(h => {
+    let x = h.x - camera.x * 0.3; // parallax
+    if(x > NES_W+100 || x+h.w < -100) return;
+    // Simple hill shape
+    ctx.fillStyle = h.c;
+    ctx.beginPath();
+    ctx.moveTo(x*SCALE, (h.y+h.h)*SCALE);
+    ctx.quadraticCurveTo((x+h.w/2)*SCALE, (h.y)*SCALE, (x+h.w)*SCALE, (h.y+h.h)*SCALE);
+    ctx.fill();
+    ctx.fillStyle = h.c2;
+    ctx.beginPath();
+    ctx.moveTo((x+5)*SCALE, (h.y+h.h)*SCALE);
+    ctx.quadraticCurveTo((x+h.w/2)*SCALE, (h.y+5)*SCALE, (x+h.w-5)*SCALE, (h.y+h.h)*SCALE);
+    ctx.fill();
+  });
+
+  // Clouds
+  const clouds = [
+    {x:8*16, y:2*16, w:32},{x:19*16, y:3*16, w:24},{x:36*16, y:2*16, w:48},
+    {x:56*16, y:3*16, w:24},{x:67*16, y:2*16, w:32},{x:84*16, y:3*16, w:24},
+    {x:99*16, y:2*16, w:48},{x:116*16, y:3*16, w:24},{x:131*16, y:2*16, w:32},
+    {x:148*16, y:3*16, w:24},{x:163*16, y:2*16, w:48},{x:180*16, y:3*16, w:24},
+    {x:195*16, y:2*16, w:32},
+  ];
+  clouds.forEach(c => {
+    let x = c.x - camera.x * 0.5;
+    if(x > NES_W+50 || x+c.w < -50) return;
+    drawPixelRect(x, c.y, c.w, 12, '#fff');
+    drawPixelRect(x+4, c.y-4, c.w-8, 4, '#fff');
+    drawPixelRect(x+c.w/4, c.y-8, c.w/2, 4, '#fff');
+    drawPixelRect(x+2, c.y+12, c.w-4, 4, '#e8e8e8');
+  });
+
+  // Bushes
+  const bushes = [
+    {x:11*16, y:12*16+8, w:32},{x:23*16, y:12*16+8, w:24},{x:41*16, y:12*16+8, w:48},
+    {x:59*16, y:12*16+8, w:24},{x:71*16, y:12*16+8, w:32},{x:89*16, y:12*16+8, w:24},
+    {x:103*16, y:12*16+8, w:48},{x:120*16, y:12*16+8, w:24},{x:135*16, y:12*16+8, w:32},
+    {x:152*16, y:12*16+8, w:24},{x:167*16, y:12*16+8, w:48},{x:184*16, y:12*16+8, w:24},
+  ];
+  bushes.forEach(b => {
+    let x = b.x - camera.x;
+    if(x > NES_W+50 || x+b.w < -50) return;
+    drawPixelRect(x, b.y, b.w, 12, '#00a800');
+    drawPixelRect(x+2, b.y-2, b.w-4, 4, '#00c800');
+    drawPixelRect(x+b.w/4, b.y-6, b.w/2, 4, '#00c800');
+  });
+}
+
+// ============================================================
+// MAIN LOOP
+// ============================================================
+let lastTime = 0;
+let accumulator = 0;
+const TIMESTEP = 1000/60;
+
+function gameLoop(timestamp) {
+  if(!lastTime) lastTime = timestamp;
+  let delta = timestamp - lastTime;
+  lastTime = timestamp;
+  accumulator += delta;
+
+  while(accumulator >= TIMESTEP) {
+    if(gameState === 'playing' || gameState === 'dying') {
+      globalTimer++;
+      updateMario();
+      if(gameState === 'playing') {
+        updateEnemies();
+        updateItems();
+        updateFireballs();
+        updateParticles();
+        checkEnemyCollisions();
+        updateCamera();
+      }
+    }
+    accumulator -= TIMESTEP;
+  }
+
+  // Render
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if(gameState === 'title') {
+    renderBackground();
+    drawText('SUPER MARIO BROS.', 45, 60, '#e52521', 16);
+    drawText('WORLD 1-1', 85, 90, '#fcb040', 12);
+    drawText('← → MOVE   ↑/SPACE JUMP', 30, 140, '#fff', 8);
+    drawText('SHIFT RUN   Z FIREBALL', 30, 155, '#fff', 8);
+    // Draw a mario
+    drawMarioSprite(120, 180, 'small', 0, 1, false, false);
+    // Draw a goomba
+    drawGoomba(150, 184, false, Math.floor(globalTimer/12)%2);
+    globalTimer++;
+  } else {
+    renderBackground();
+    renderDecorations();
+    renderTiles();
+    renderFlagpole();
+    renderCastle();
+    renderEntities();
+    renderMario();
+    renderParticles();
+    renderHUD();
+    renderOverlay();
+  }
+
+  // Restart on Enter in gameover/levelcomplete
+  if((gameState === 'gameover' || gameState === 'levelcomplete') && keys['Enter']) {
+    mario.score = 0; mario.coins = 0; mario.lives = 3;
+    mario.state = 'small'; mario.h = 16;
+    resetLevel();
+    gameState = 'playing';
+  }
+
+  requestAnimationFrame(gameLoop);
+}
+
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
